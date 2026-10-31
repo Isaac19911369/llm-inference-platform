@@ -1,0 +1,79 @@
+# -- Serving engine: "nim" (NVIDIA NIM, TensorRT-LLM/vLLM inside) or "vllm" (open-source vLLM)
+engine: nim
+
+model:
+  # Name clients send in the "model" field
+  servedName: meta/llama-3.1-8b-instruct
+  # vLLM only: Hugging Face model id or local path in the cache volume
+  hfId: meta-llama/Llama-3.1-8B-Instruct
+  maxModelLen: 8192
+  # vLLM: --tensor-parallel-size. NIM: chosen by the model profile (set nimProfile to pin it)
+  tensorParallel: 1
+  nimProfile: ""
+
+images:
+  nim:
+    repository: nvcr.io/nim/meta/llama-3.1-8b-instruct
+    tag: "1.3.3"
+  vllm:
+    repository: vllm/vllm-openai
+    tag: v0.6.4
+  pullPolicy: IfNotPresent
+  # NGC registry credentials for nvcr.io (kubernetes.io/dockerconfigjson)
+  pullSecrets: [ngc-registry]
+
+# Secret holding NGC_API_KEY (NIM) and/or HF_TOKEN (vLLM); never put keys in values
+credentialsSecret: llm-credentials
+
+replicaCount: 1
+
+resources:
+  limits:
+    nvidia.com/gpu: 1
+    memory: 48Gi
+  requests:
+    cpu: "4"
+    memory: 32Gi
+
+# Weights are downloaded once into a shared PVC instead of on every pod start
+modelCache:
+  enabled: true
+  size: 100Gi
+  storageClassName: ""        # RWX class (e.g. Azure Files, NFS, HPE GreenLake File) for >1 replica
+  accessMode: ReadWriteMany
+
+# /dev/shm for NCCL when tensorParallel > 1
+shmSize: 16Gi
+
+service:
+  type: ClusterIP
+  port: 8000
+
+# Scale on what users feel: requests queued in the engine, not GPU utilisation.
+# Requires KEDA and Prometheus. Cold starts are slow (image + weights), so scale up
+# early and scale down conservatively.
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  prometheusAddress: http://prometheus-operated.monitoring.svc:9090
+  # Average requests waiting per replica that triggers a scale-out
+  queueThreshold: "5"
+  cooldownPeriod: 600
+
+monitoring:
+  serviceMonitor: true
+  prometheusRule: true
+  ttftP95AlertSeconds: 2
+  queueAlertThreshold: 20
+
+podDisruptionBudget:
+  maxUnavailable: 1
+
+nodeSelector:
+  nvidia.com/gpu.present: "true"
+tolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+affinity: {}

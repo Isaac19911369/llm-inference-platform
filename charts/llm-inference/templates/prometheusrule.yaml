@@ -1,0 +1,36 @@
+{{- if .Values.monitoring.prometheusRule }}
+{{- $p := include "llm.metricPrefix" . }}
+{{- $svc := include "llm.fullname" . }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ $svc }}
+  labels:
+    {{- include "llm.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: llm-inference.slo
+      rules:
+        - alert: LLMTimeToFirstTokenHigh
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate({{ $p }}time_to_first_token_seconds_bucket{service="{{ $svc }}"}[5m])))
+              > {{ .Values.monitoring.ttftP95AlertSeconds }}
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "p95 time-to-first-token above {{ .Values.monitoring.ttftP95AlertSeconds }}s"
+            runbook: "Check queue depth and autoscaler; consider more replicas or shorter max context."
+        - alert: LLMQueueBacklog
+          expr: sum({{ $p }}num_requests_waiting{service="{{ $svc }}"}) > {{ .Values.monitoring.queueAlertThreshold }}
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "More than {{ .Values.monitoring.queueAlertThreshold }} requests queued"
+            runbook: "Autoscaler at max replicas or GPUs unavailable. Check KEDA and node pool."
+        - alert: LLMKVCacheSaturated
+          expr: avg({{ $p }}gpu_cache_usage_perc{service="{{ $svc }}"}) > 0.95
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "KV cache above 95% for 15 minutes; requests are being preempted or queued"
+{{- end }}

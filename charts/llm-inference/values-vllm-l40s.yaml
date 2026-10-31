@@ -1,0 +1,12 @@
+# Example: open-source vLLM on one L40S (48 GB), Llama 3.1 8B in BF16.
+engine: vllm
+model:
+  servedName: meta/llama-3.1-8b-instruct
+  hfId: meta-llama/Llama-3.1-8B-Instruct
+  maxModelLen: 8192
+  tensorParallel: 1
+resources:
+  limits: { nvidia.com/gpu: 1, memory: 48Gi }
+  requests: { cpu: "4", memory: 32Gi }
+nodeSelector:
+  nvidia.com/gpu.product: NVIDIA-L40S

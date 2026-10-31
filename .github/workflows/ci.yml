@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests && ruff format --check src tests
+      - run: pytest
+      - name: Capacity plan in job summary
+        run: llmplat plan --models llama-3.1-8b llama-3.1-70b --tp 1 2 4 >> "$GITHUB_STEP_SUMMARY"
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: helm lint (all value sets)
+        run: |
+          for v in charts/llm-inference/values*.yaml; do
+            helm lint charts/llm-inference -f "$v"
+          done
+      - name: Render and validate manifests against Kubernetes schemas
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          for v in charts/llm-inference/values*.yaml; do
+            helm template demo charts/llm-inference -f "$v" \
+              | ./kubeconform -strict -summary -ignore-missing-schemas \
+                  -schema-location default \
+                  -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+          done

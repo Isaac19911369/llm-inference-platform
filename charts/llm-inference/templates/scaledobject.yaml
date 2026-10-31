@@ -1,0 +1,31 @@
+{{- if .Values.autoscaling.enabled }}
+# KEDA scales on the engine's queue depth from Prometheus.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "llm.fullname" . }}
+  labels:
+    {{- include "llm.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "llm.fullname" . }}
+  minReplicaCount: {{ .Values.autoscaling.minReplicas }}
+  maxReplicaCount: {{ .Values.autoscaling.maxReplicas }}
+  cooldownPeriod: {{ .Values.autoscaling.cooldownPeriod }}
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies: [{ type: Pods, value: 1, periodSeconds: 60 }]
+        scaleDown:
+          stabilizationWindowSeconds: 900
+          policies: [{ type: Pods, value: 1, periodSeconds: 300 }]
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: {{ .Values.autoscaling.prometheusAddress }}
+        query: >-
+          sum({{ include "llm.metricPrefix" . }}num_requests_waiting{namespace="{{ .Release.Namespace }}",service="{{ include "llm.fullname" . }}"})
+        threshold: {{ .Values.autoscaling.queueThreshold | quote }}
+{{- end }}

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: llm-inference
+description: OpenAI-compatible LLM serving on Kubernetes GPUs with NVIDIA NIM or vLLM, queue-depth autoscaling and Prometheus monitoring
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

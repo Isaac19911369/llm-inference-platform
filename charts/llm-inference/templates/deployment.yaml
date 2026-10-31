@@ -1,0 +1,125 @@
+{{- include "llm.validate" . -}}
+{{- $img := index .Values.images .Values.engine -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm.fullname" . }}
+  labels:
+    {{- include "llm.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy:
+    # never run two copies on one GPU node during an update
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels:
+      {{- include "llm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llm.selectorLabels" . | nindent 8 }}
+        llm.platform/engine: {{ .Values.engine }}
+    spec:
+      {{- with .Values.images.pullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: server
+          image: "{{ $img.repository }}:{{ $img.tag }}"
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          {{- if eq .Values.engine "vllm" }}
+          args:
+            - --model={{ .Values.model.hfId }}
+            - --served-model-name={{ .Values.model.servedName }}
+            - --max-model-len={{ .Values.model.maxModelLen }}
+            - --tensor-parallel-size={{ .Values.model.tensorParallel }}
+            - --gpu-memory-utilization=0.90
+            - --enable-prefix-caching
+            - --port=8000
+          {{- end }}
+          env:
+            {{- if eq .Values.engine "nim" }}
+            - name: NIM_CACHE_PATH
+              value: /cache
+            - name: NIM_SERVED_MODEL_NAME
+              value: {{ .Values.model.servedName | quote }}
+            - name: NIM_MAX_MODEL_LEN
+              value: {{ .Values.model.maxModelLen | quote }}
+            {{- with .Values.model.nimProfile }}
+            # NIM picks an optimised engine profile (precision, TP) for the GPUs it finds;
+            # pin one explicitly for reproducible deployments (list-model-profiles)
+            - name: NIM_MODEL_PROFILE
+              value: {{ . | quote }}
+            {{- end }}
+            - name: NGC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.credentialsSecret }}, key: NGC_API_KEY }
+            {{- else }}
+            - name: HF_HOME
+              value: /cache
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.credentialsSecret }}, key: HF_TOKEN, optional: true }
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8000
+          # first start downloads and compiles the model: allow up to 30 minutes
+          startupProbe:
+            httpGet:
+              path: {{ if eq .Values.engine "nim" }}/v1/health/ready{{ else }}/health{{ end }}
+              port: http
+            periodSeconds: 10
+            failureThreshold: 180
+          readinessProbe:
+            httpGet:
+              path: {{ if eq .Values.engine "nim" }}/v1/health/ready{{ else }}/health{{ end }}
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: {{ if eq .Values.engine "nim" }}/v1/health/live{{ else }}/health{{ end }}
+              port: http
+            periodSeconds: 30
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: cache
+          {{- if .Values.modelCache.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "llm.fullname" . }}-cache
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.shmSize }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
